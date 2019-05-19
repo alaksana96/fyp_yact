@@ -23,23 +23,20 @@ Open the ``src/fyp_yact/msg`` folder to see the custom messages:
     int64 ymax
     ```
 
-* **`BoundingBoxes`** 
+* **`CompressedImageAndBoundingBoxes`** 
 
     Contains the list of detections.
 
     ```
     Header header
-    Header image_header
+    string format
+    uint8[] data
     BoundingBox[] bounding_boxes
     ```
 ## Topics
 
 ### Subscribed Topics
 
-* **`/yolo_detector/output/compressed`** ([sensor_msg::CompressedImage])
+* **`/yolo_detector/output/compresseddetections`** ([sensor_msg::CompressedImageAndBoundingBoxes])
 
-    Subscribe to the compressed image topic from the Hololens in the JPEG format.
-
-* **`/yolo_detector/output/detections`** ([fyp_yact::BoundingBoxes])
-
-    Subscribe to the detections from the YOLO detector.
+    Subscribe to the compressed image topic from the Hololens in the JPEG format and the detections from YOLO.
