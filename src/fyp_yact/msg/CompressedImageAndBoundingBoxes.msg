@@ -1,3 +1,4 @@
 Header header
-Header image_header
+string format
+uint8[] data
 BoundingBox[] bounding_boxes
