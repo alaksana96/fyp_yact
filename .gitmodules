@@ -1,3 +1,6 @@
 [submodule "src/fyp_yact/src/sort"]
 	path = src/fyp_yact/src/sort
 	url = git@github.com:alaksana96/sort.git
+[submodule "src/fyp_yact/src/deep_sort"]
+	path = src/fyp_yact/src/deep_sort
+	url = git@github.com:alaksana96/deep_sort.git

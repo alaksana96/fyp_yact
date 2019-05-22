@@ -4,7 +4,6 @@ import sys, os
 
 ''' 
     Adding SORT to Python Path
-    This is done so we can access the sort.py functions
 '''
 absFilePath = os.path.abspath(__file__)
 fileDir     = os.path.dirname(absFilePath)
@@ -15,10 +14,18 @@ sys.path.insert(0, sortPath)
 
 import sort
 
+'''
+Deep Sort Imports
+'''
+from deep_sort.deep_sort           import nn_matching
+from deep_sort.deep_sort.detection import Detection
+from deep_sort.deep_sort.tracker   import Tracker
+
 from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes
 
-import numpy as np
+from   collections import deque
 import cv2
+import numpy as np
 
 import cv_bridge as bridge
 import rospy
@@ -33,13 +40,24 @@ class yact_node:
 
         self.sort = sort.Sort()
 
+        # Deep Sort
+        metric = nn_matching.NearestNeighborDistanceMetric('cosine',
+                                                           matching_threshold = 0.2,
+                                                           budget = 100)
+        self.tracker        = Tracker(metric)
+        self.trackedObjects = []
+
+        self.dequeDetections = deque(maxlen = 10)
+
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
                                                           queue_size = 10)
 
-
+    #region ROS
     def callback(self, msg):
+
+        img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
 
         lstDetections = msg.bounding_boxes
 
@@ -55,24 +73,82 @@ class yact_node:
                                     det.xmax, 
                                     det.ymax, 
                                     det.probability])
-
         else:
             lstDets = []
 
         npDets = np.array(lstDets)
 
-        self.trackers = self.sort.update(npDets)
+        self.trackersCur  = self.sort.update(npDets)
 
+        # Update deque
+        zDetections = []
+
+        for tracker in self.trackersCur:
+            z = {'ID' : tracker[4], 'zbox' : self.convertBBToCentroid(tracker[0:4])}
+            zDetections.append(z)
+
+        self.dequeDetections.append(zDetections)
+
+        # Predict direction of motion for objects
+        
 
         if self.debug > 0:
-            img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
-            self.displayDetections(self.trackers, img)
+            # self.estimatePersonMotion(img)
+            self.displayDetections(img)
+    #endregion
 
 
+    #region MOTIONESTIMATOR
+    def estimatePersonMotion(self, img):
 
-    def displayDetections(self, detections, img):
+        trackerCurrentCentroids = self.dequeDetections[-1]
 
-        for detected in detections:
+        for tracker in trackerCurrentCentroids:
+    
+            trackerX = []
+            trackerY = []
+
+            for ind in range(len(self.dequeDetections) - 2, -1, -1):
+            
+                for zDetection in self.dequeDetections[ind]:
+
+                    if(zDetection['ID'] == tracker['ID']):
+
+                        trackerX.append(np.asscalar(zDetection['zbox'][0]))
+                        trackerY.append(np.asscalar(zDetection['zbox'][1]))
+
+            trackerZ = np.polyfit(np.array(trackerX), np.array(trackerY), 4)
+            trackerF = np.poly1d(trackerZ)
+
+            cv2.line(img, 
+                     (int(np.asscalar(tracker['zbox'][0]) - 5), int(np.asscalar(tracker['zbox'][1] -5 ))),
+                     (int(np.asscalar(tracker['zbox'][0]) + 5), int(trackerF(np.asscalar(tracker['zbox'][0]) + 5))),    
+                     (0,255,0),
+                     5)
+    #endregion
+
+
+    #region HELPERFNS
+    def convertBBToCentroid(self, bbox):
+        '''
+        arguments:
+            bbox: array [xmin, ymin, xmax, ymax]
+        
+        returns:
+            centroid: array [xcentre, ycentre]
+        '''
+
+        xcentre = float((bbox[0] + bbox[2]) / 2)
+        ycentre = float((bbox[1] + bbox[3]) / 2)
+
+        return np.asarray([xcentre, ycentre]).reshape((2,1))
+    #endregion
+
+
+    #region DEBUG 
+    def displayDetections(self, img):
+
+        for detected in self.trackersCur:
             # x,y co-ordinates are the centre of the object
             xmin = int(detected[0])
             ymin = int(detected[1])
@@ -87,6 +163,7 @@ class yact_node:
 
         cv2.imshow('yact: people_tracker.py', img)
         cv2.waitKey(3)
+    #endregion
 
 
 def main(args):
