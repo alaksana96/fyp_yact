@@ -17,6 +17,8 @@ The node depends on the detections of people/person objects from the yolo detect
     * Based off [nwojke](https://github.com/nwojke)'s implementation.
         * Modified to run on ``tensorflow-gpu==1.4.0`` (CUDA 8.0 and cuDNN6 on Ubuntu 16.04).
 
+    * [Youtube Video](https://youtu.be/1Br1ZKIr9FY)
+
 ## Custom Messages
 
 Open the ``src/fyp_yact/msg`` folder to see the custom messages:

@@ -17,7 +17,7 @@ import cv_bridge as bridge
 import rospy
 from   sensor_msgs.msg import CompressedImage
 
-import cProfile, pstats
+import time
 
 
 class yact_node:
@@ -25,9 +25,10 @@ class yact_node:
     def __init__(self, debug = 0):
         
         self.debug = debug
-
         self.frameCount = 0
-        self.frameSkip  = 1
+        self.frameSkip  = 10
+
+        self.timePrev = time.time()
 
         # Deep Sort
         metric = nn_matching.NearestNeighborDistanceMetric('cosine',
@@ -36,7 +37,10 @@ class yact_node:
         self.tracker        = Tracker(metric)
         self.trackedObjects = []
 
-        filePathModel = '/home/aufar/fyp_yact/src/fyp_yact/src/deep_sort/resources/networks/mars-small128.pb'
+        absFilePath = os.path.abspath(__file__)
+        fileDir     = os.path.dirname(absFilePath)
+
+        filePathModel = os.path.join(fileDir, 'deep_sort/resources/networks/mars-small128.pb')
         self.encoder = gdet.create_box_encoder(filePathModel, batch_size=1)
 
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
@@ -46,7 +50,7 @@ class yact_node:
 
     #region ROS
     def callback(self, msg):
-        
+
         img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
 
         lstDetections = msg.bounding_boxes
@@ -66,23 +70,32 @@ class yact_node:
         else:
             lstDets = []
 
-        if(self.frameCount % self.frameSkip == 0):
             
-            #region DEEPSORT
-            
-            features = self.encoder(img, lstDets)
+        #region DEEPSORT
+        
+        features = self.encoder(img, lstDets)
 
-            # Create DeepSort detections
-            self.trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
-    
-            self.tracker.predict()
-            self.tracker.update(self.trackedObjects)
+        # Create DeepSort detections
+        self.trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
 
-            #endregion
+        self.tracker.predict()
+        self.tracker.update(self.trackedObjects)
+
+        #endregion
 
         if self.debug > 0:
             # self.estimatePersonMotion(img)
+
+            #FPS
+            if(self.frameCount % self.frameSkip == 0):
+                timer = time.time() - self.timePrev
+                self.intFPS = int(self.frameSkip/timer)
+                print(self.intFPS)
+                self.timePrev = time.time()
+
             self.displayDetections(img)
+
+        self.frameCount += 1
 
     #endregion
 
@@ -118,6 +131,9 @@ class yact_node:
             cv2.rectangle(img, (int(bbox[0]) , int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
             labelText = 'ID: {}'.format(track.track_id)
             cv2.putText(img, labelText, (int(bbox[0]), int(bbox[1]) - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+
+            # Print FPS
+            cv2.putText(img, 'FPS: {}'.format(self.intFPS), (img.shape[1] - 100, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
 
         cv2.imshow('yact: people_tracker.py', img)
         cv2.waitKey(3)
