@@ -2,24 +2,10 @@
 
 import sys, os
 
-''' 
-    Adding SORT to Python Path
-'''
-absFilePath = os.path.abspath(__file__)
-fileDir     = os.path.dirname(absFilePath)
-sortPath    = os.path.join(fileDir, 'sort')
-
-print('Adding SORT to Python Path by inserting: {}'.format(sortPath))
-sys.path.insert(0, sortPath)
-
-import sort
-
-'''
-Deep Sort Imports
-'''
 from deep_sort.deep_sort           import nn_matching
 from deep_sort.deep_sort.detection import Detection
 from deep_sort.deep_sort.tracker   import Tracker
+from deep_sort.tools               import generate_detections as gdet
 
 from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes
 
@@ -31,6 +17,8 @@ import cv_bridge as bridge
 import rospy
 from   sensor_msgs.msg import CompressedImage
 
+import cProfile, pstats
+
 
 class yact_node:
 
@@ -38,7 +26,8 @@ class yact_node:
         
         self.debug = debug
 
-        self.sort = sort.Sort()
+        self.frameCount = 0
+        self.frameSkip  = 1
 
         # Deep Sort
         metric = nn_matching.NearestNeighborDistanceMetric('cosine',
@@ -47,16 +36,17 @@ class yact_node:
         self.tracker        = Tracker(metric)
         self.trackedObjects = []
 
-        self.dequeDetections = deque(maxlen = 10)
+        filePathModel = '/home/aufar/fyp_yact/src/fyp_yact/src/deep_sort/resources/networks/mars-small128.pb'
+        self.encoder = gdet.create_box_encoder(filePathModel, batch_size=1)
 
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
-                                                          queue_size = 10)
+                                                          queue_size = 1)
 
     #region ROS
     def callback(self, msg):
-
+        
         img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
 
         lstDetections = msg.bounding_boxes
@@ -68,63 +58,32 @@ class yact_node:
             for det in lstDetections:
                 
                 if det.Class == 'person':
-                    lstDets.append([det.xmin, 
-                                    det.ymin, 
-                                    det.xmax, 
-                                    det.ymax, 
-                                    det.probability])
+                    # Deep Sort Bounding Boxes
+                    # Use the format TOP LEFT WIDTH HEIGHT (tlwh)
+                    dsWidth  = det.xmax - det.xmin
+                    dsHeight = det.ymax - det.ymin 
+                    lstDets.append([det.xmin, det.ymin, dsWidth, dsHeight])
         else:
             lstDets = []
 
-        npDets = np.array(lstDets)
+        if(self.frameCount % self.frameSkip == 0):
+            
+            #region DEEPSORT
+            
+            features = self.encoder(img, lstDets)
 
-        self.trackersCur  = self.sort.update(npDets)
+            # Create DeepSort detections
+            self.trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
+    
+            self.tracker.predict()
+            self.tracker.update(self.trackedObjects)
 
-        # Update deque
-        zDetections = []
-
-        for tracker in self.trackersCur:
-            z = {'ID' : tracker[4], 'zbox' : self.convertBBToCentroid(tracker[0:4])}
-            zDetections.append(z)
-
-        self.dequeDetections.append(zDetections)
-
-        # Predict direction of motion for objects
-        
+            #endregion
 
         if self.debug > 0:
             # self.estimatePersonMotion(img)
             self.displayDetections(img)
-    #endregion
 
-
-    #region MOTIONESTIMATOR
-    def estimatePersonMotion(self, img):
-
-        trackerCurrentCentroids = self.dequeDetections[-1]
-
-        for tracker in trackerCurrentCentroids:
-    
-            trackerX = []
-            trackerY = []
-
-            for ind in range(len(self.dequeDetections) - 2, -1, -1):
-            
-                for zDetection in self.dequeDetections[ind]:
-
-                    if(zDetection['ID'] == tracker['ID']):
-
-                        trackerX.append(np.asscalar(zDetection['zbox'][0]))
-                        trackerY.append(np.asscalar(zDetection['zbox'][1]))
-
-            trackerZ = np.polyfit(np.array(trackerX), np.array(trackerY), 4)
-            trackerF = np.poly1d(trackerZ)
-
-            cv2.line(img, 
-                     (int(np.asscalar(tracker['zbox'][0]) - 5), int(np.asscalar(tracker['zbox'][1] -5 ))),
-                     (int(np.asscalar(tracker['zbox'][0]) + 5), int(trackerF(np.asscalar(tracker['zbox'][0]) + 5))),    
-                     (0,255,0),
-                     5)
     #endregion
 
 
@@ -148,18 +107,17 @@ class yact_node:
     #region DEBUG 
     def displayDetections(self, img):
 
-        for detected in self.trackersCur:
-            # x,y co-ordinates are the centre of the object
-            xmin = int(detected[0])
-            ymin = int(detected[1])
-
-            xmax = int(detected[2])
-            ymax = int(detected[3])
+        for track in self.tracker.tracks:
+            
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue
+            
+            bbox = track.to_tlbr()
 
             # Draw bounding box and label
-            cv2.rectangle(img, (xmin , ymin), (xmax, ymax), (255,0,0))
-            labelText = 'ID: {}'.format(detected[4])
-            cv2.putText(img, labelText, (xmin, ymin - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0))
+            cv2.rectangle(img, (int(bbox[0]) , int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
+            labelText = 'ID: {}'.format(track.track_id)
+            cv2.putText(img, labelText, (int(bbox[0]), int(bbox[1]) - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
 
         cv2.imshow('yact: people_tracker.py', img)
         cv2.waitKey(3)
