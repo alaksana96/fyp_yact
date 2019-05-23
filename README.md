@@ -6,6 +6,17 @@ This repository contains the ROS nodes for tracking and calculating the trajecto
 
 The node depends on the detections of people/person objects from the yolo detector.
 
+## Submodules:
+
+* ~~[SORT](https://github.com/alaksana96/sort/tree/master)~~
+    * ~~Based off __abewley__'s implementation of the SORT algorithm~~
+
+* [Deep SORT](https://github.com/alaksana96/deep_sort/tree/master)
+    * Deep SORT was a major improvement to the basic SORT algorithm.
+    * Better tracking of objects due to feature generation of Bounding Boxes as well as using a learned cosine distance as a metric to compare tracked objects to new detections.
+    * Based off [nwojke](https://github.com/nwojke)'s implementation.
+        * Modified to run on ``tensorflow-gpu==1.4.0`` (CUDA 8.0 and cuDNN6 on Ubuntu 16.04).
+
 ## Custom Messages
 
 Open the ``src/fyp_yact/msg`` folder to see the custom messages:
