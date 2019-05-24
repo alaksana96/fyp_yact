@@ -13,11 +13,14 @@ from   collections import deque
 import cv2
 import numpy as np
 
+
 import cv_bridge as bridge
 import rospy
 from   sensor_msgs.msg import CompressedImage
 
 import time
+
+import pdb
 
 
 class yact_node:
@@ -25,24 +28,25 @@ class yact_node:
     def __init__(self, debug = 0):
         
         self.debug = debug
+        
         self.frameCount = 0
-        self.frameSkip  = 10
+        self.timePrev   = time.time()
 
-        self.timePrev = time.time()
-
-        # Deep Sort
+        #region DEEPSORT
         metric = nn_matching.NearestNeighborDistanceMetric('cosine',
                                                            matching_threshold = 0.2,
                                                            budget = 100)
-        self.tracker        = Tracker(metric)
-        self.trackedObjects = []
+        self.tracker = Tracker(metric)
 
         absFilePath = os.path.abspath(__file__)
         fileDir     = os.path.dirname(absFilePath)
 
         filePathModel = os.path.join(fileDir, 'deep_sort/resources/networks/mars-small128.pb')
-        self.encoder = gdet.create_box_encoder(filePathModel, batch_size=1)
+        self.encoder  = gdet.create_box_encoder(filePathModel, batch_size=1)
+        #endregion
 
+        self.dequeDetections = deque(maxlen = 2)
+        
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
@@ -52,10 +56,13 @@ class yact_node:
     def callback(self, msg):
 
         img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
+        imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         lstDetections = msg.bounding_boxes
 
         lstDets = []
+
+        lstHeads = []
 
         if( lstDetections ):
             
@@ -72,48 +79,76 @@ class yact_node:
 
             
         #region DEEPSORT
-        
         features = self.encoder(img, lstDets)
 
         # Create DeepSort detections
-        self.trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
+        trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
 
         self.tracker.predict()
-        self.tracker.update(self.trackedObjects)
-
+        self.tracker.update(trackedObjects)
         #endregion
 
-        if self.debug > 0:
-            # self.estimatePersonMotion(img)
+        """
+        #region TRAJECTORYESTIMATION
+        if(self.frameCount % 1 == 0):
+            
+            xPast = []
+            yPast = []
+            
+            self.dequeDetections.append(self.tracker.tracks)
 
-            #FPS
-            if(self.frameCount % self.frameSkip == 0):
-                timer = time.time() - self.timePrev
-                self.intFPS = int(self.frameSkip/timer)
-                print(self.intFPS)
+            for trackCur in self.tracker.tracks:
+
+                for ind in range(len(self.dequeDetections) - 2, -1, -1):
+                    # Loop over list of tracks 5, 10, 15 ... frames in the past
+
+                    for trackPast in self.dequeDetections[ind]: 
+                        # Find ID if possible
+                        if trackPast.track_id == trackCur.track_id:
+                            # Get centroids
+                            xPast.append(trackPast.mean[0])
+                            yPast.append(trackPast.mean[1])
+                
+                xPast = np.array(xPast)
+                yPast = np.array(yPast)
+
+                z = np.polyfit(xPast, yPast, 1)
+                p = np.poly1d(z)
+
+
+
+                xLeft  = int(trackCur.mean[0]) - 10
+                xRight = int(trackCur.mean[0]) + 10
+
+                # pdb.set_trace()
+
+
+                pos1 = (int(xLeft), int(p(xLeft)))
+                pos2 = (int(xRight), int(p(xRight)))
+
+
+                cv2.line(img, pos1,pos2, (0, 255, 0), 2)
+
+                # Reset histories for next tracker
+                xPast = []
+                yPast = []
+        #endregion
+        """
+
+
+        if self.debug > 0:
+
+            #FPS Calculation (Measure time for 10 frames)
+            if(self.frameCount % 10 == 0):
+                timer         = time.time() - self.timePrev
                 self.timePrev = time.time()
+
+                self.intFPS   = int(10/timer)
 
             self.displayDetections(img)
 
         self.frameCount += 1
 
-    #endregion
-
-
-    #region HELPERFNS
-    def convertBBToCentroid(self, bbox):
-        '''
-        arguments:
-            bbox: array [xmin, ymin, xmax, ymax]
-        
-        returns:
-            centroid: array [xcentre, ycentre]
-        '''
-
-        xcentre = float((bbox[0] + bbox[2]) / 2)
-        ycentre = float((bbox[1] + bbox[3]) / 2)
-
-        return np.asarray([xcentre, ycentre]).reshape((2,1))
     #endregion
 
 
