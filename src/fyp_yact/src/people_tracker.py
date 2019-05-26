@@ -2,17 +2,13 @@
 
 import sys, os
 
-from deep_sort.deep_sort           import nn_matching
-from deep_sort.deep_sort.detection import Detection
-from deep_sort.deep_sort.tracker   import Tracker
-from deep_sort.tools               import generate_detections as gdet
+from openpose import pyopenpose as op
 
 from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes
 
 from   collections import deque
 import cv2
 import numpy as np
-
 
 import cv_bridge as bridge
 import rospy
@@ -32,147 +28,109 @@ class yact_node:
         self.frameCount = 0
         self.timePrev   = time.time()
 
-        #region DEEPSORT
-        metric = nn_matching.NearestNeighborDistanceMetric('cosine',
-                                                           matching_threshold = 0.2,
-                                                           budget = 100)
-        self.tracker = Tracker(metric)
+        #region OPENPOSE
+        opParams = dict()
+        opParams['model_folder']   = '/home/aufar/Documents/openpose/models/'
+        opParams['net_resolution'] = '176x176'
+        # opParams['disable_multi_thread'] = ''
 
-        absFilePath = os.path.abspath(__file__)
-        fileDir     = os.path.dirname(absFilePath)
+        self.opWrapper = op.WrapperPython()
+        
+        self.opWrapper.configure(opParams)
+        self.opWrapper.start()
 
-        filePathModel = os.path.join(fileDir, 'deep_sort/resources/networks/mars-small128.pb')
-        self.encoder  = gdet.create_box_encoder(filePathModel, batch_size=1)
+        self.datum = op.Datum()
         #endregion
 
-        self.dequeDetections = deque(maxlen = 2)
-        
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
                                                           queue_size = 1)
 
-    #region ROS
+
     def callback(self, msg):
 
-        img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
-        imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        self.img = cv2.imdecode(np.fromstring(msg.data, np.uint8), 1)
 
         lstDetections = msg.bounding_boxes
 
         lstDets = []
-
-        lstHeads = []
 
         if( lstDetections ):
             
             for det in lstDetections:
                 
                 if det.Class == 'person':
-                    # Deep Sort Bounding Boxes
-                    # Use the format TOP LEFT WIDTH HEIGHT (tlwh)
-                    dsWidth  = det.xmax - det.xmin
-                    dsHeight = det.ymax - det.ymin 
-                    lstDets.append([det.xmin, det.ymin, dsWidth, dsHeight])
+                    lstDets.append([det.xmin, det.ymin, det.xmax, det.ymax])
         else:
             lstDets = []
 
-            
-        #region DEEPSORT
-        features = self.encoder(img, lstDets)
+        if self.frameCount % 1 == 0:
+            self.datum.cvInputData = self.img
+            self.opWrapper.emplaceAndPop([self.datum])
 
-        # Create DeepSort detections
-        trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDets, features)]
+            self.matchDetectionAndPose(lstDets, self.datum.poseKeypoints)
 
-        self.tracker.predict()
-        self.tracker.update(trackedObjects)
-        #endregion
-
-        """
-        #region TRAJECTORYESTIMATION
-        if(self.frameCount % 1 == 0):
-            
-            xPast = []
-            yPast = []
-            
-            self.dequeDetections.append(self.tracker.tracks)
-
-            for trackCur in self.tracker.tracks:
-
-                for ind in range(len(self.dequeDetections) - 2, -1, -1):
-                    # Loop over list of tracks 5, 10, 15 ... frames in the past
-
-                    for trackPast in self.dequeDetections[ind]: 
-                        # Find ID if possible
-                        if trackPast.track_id == trackCur.track_id:
-                            # Get centroids
-                            xPast.append(trackPast.mean[0])
-                            yPast.append(trackPast.mean[1])
-                
-                xPast = np.array(xPast)
-                yPast = np.array(yPast)
-
-                z = np.polyfit(xPast, yPast, 1)
-                p = np.poly1d(z)
-
-
-
-                xLeft  = int(trackCur.mean[0]) - 10
-                xRight = int(trackCur.mean[0]) + 10
-
-                # pdb.set_trace()
-
-
-                pos1 = (int(xLeft), int(p(xLeft)))
-                pos2 = (int(xRight), int(p(xRight)))
-
-
-                cv2.line(img, pos1,pos2, (0, 255, 0), 2)
-
-                # Reset histories for next tracker
-                xPast = []
-                yPast = []
-        #endregion
-        """
-
-
-        if self.debug > 0:
-
-            #FPS Calculation (Measure time for 10 frames)
-            if(self.frameCount % 10 == 0):
+            if self.frameCount % 10 == 0:
                 timer         = time.time() - self.timePrev
                 self.timePrev = time.time()
-
                 self.intFPS   = int(10/timer)
 
-            self.displayDetections(img)
+            # Print FPS
+            cv2.putText(self.img, 'FPS: {}'.format(self.intFPS), (self.img.shape[1] - 100, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+
+            cv2.imshow('yact: people_tracker.py', self.img)
+        else:
+            cv2.imshow('yact: people_tracker.py', self.img)
+
+        cv2.waitKey(3)
 
         self.frameCount += 1
 
-    #endregion
+    
+    def matchDetectionAndPose(self, detections, poses):
+        '''
+        Matches the Openpose detections with bounding boxes
+        '''
 
+        for pose in poses:
+            '''
+            Check a few key positions (https://github.com/CMU-Perceptual-Computing-Lab/openpose/blob/master/doc/media/keypoints_pose_25.png)
+            0: Mid head
+            1: Mid Torso
+            2, 3, 4: Right Shoulder, Elbow, Arm
+            5, 6, 7: Left Shoulder, Elbow, Arm
+            '''
 
-    #region DEBUG 
-    def displayDetections(self, img):
-
-        for track in self.tracker.tracks:
+            # Check torso, right/left shoulder
+            torso     = pose[1]
+            rshoulder = pose[2]
+            lshoulder = pose[5]
             
-            if not track.is_confirmed() or track.time_since_update > 1:
-                continue
-            
-            bbox = track.to_tlbr()
+            for bbox in detections:
+                
+                if( self.withinBB(bbox, torso[0], torso[1]) or
+                    self.withinBB(bbox, rshoulder[0], rshoulder[1]) or
+                    self.withinBB(bbox, lshoulder[0], lshoulder[1])):
 
-            # Draw bounding box and label
-            cv2.rectangle(img, (int(bbox[0]) , int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
-            labelText = 'ID: {}'.format(track.track_id)
-            cv2.putText(img, labelText, (int(bbox[0]), int(bbox[1]) - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+                    if(rshoulder[0] > lshoulder[0]):
+                        # Moving away from camera
+                        cv2.circle(self.img, (torso[0], torso[1]), 9, (179, 16, 191), -1)
+                    else:
+                        # Moving towards camera
+                        cv2.circle(self.img, (torso[0], torso[1]), 9, (0, 0, 255), -1)
 
-            # Print FPS
-            cv2.putText(img, 'FPS: {}'.format(self.intFPS), (img.shape[1] - 100, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+                # Once matched, move onto next pose
+                break 
 
-        cv2.imshow('yact: people_tracker.py', img)
-        cv2.waitKey(3)
-    #endregion
+                
+    def withinBB(self, bbox, x, y):
+
+        if( x >= bbox[0] and x <= bbox[2] and
+            y >= bbox[1] and y <= bbox[3] ):
+            return True
+        else:
+            return False
 
 
 def main(args):
