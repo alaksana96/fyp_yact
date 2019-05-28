@@ -5,7 +5,8 @@ import sys, os
 from openpose import pyopenpose as op
 
 
-from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes
+from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes # Input Messages
+from fyp_yact.msg import BoundingBoxDirection, DetectionAndDirection  # Output Messages
 
 from   collections import deque
 import cv2
@@ -33,7 +34,6 @@ class yact_node:
         opParams = dict()
         opParams['model_folder']   = '/home/aufar/Documents/openpose/models/'
         opParams['net_resolution'] = '176x176'
-        # opParams['disable_multi_thread'] = ''
 
         self.opWrapper = op.WrapperPython()
         
@@ -47,6 +47,10 @@ class yact_node:
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
                                                           queue_size = 1)
+
+        self.publisherDetectionDirections = rospy.Publisher('people_tracker/output/detectiondirections',
+                                                            DetectionAndDirection,
+                                                            queue_size = 1)
 
 
     def callback(self, msg):
@@ -68,9 +72,16 @@ class yact_node:
         self.datum.cvInputData = self.img
         self.opWrapper.emplaceAndPop([self.datum])
 
-        
         self.matchDetectionAndPose(lstDets, self.datum.poseKeypoints)
 
+        # Build Message & Publish
+        msgDetectionAndDirection            = DetectionAndDirection()
+        msgDetectionAndDirection.header     = msg.header
+        msgDetectionAndDirection.detections = self.detectionDirections
+
+        self.publisherDetectionDirections.publish(msgDetectionAndDirection)
+
+        #region DISPLAY
         if self.frameCount % 10 == 0:
             timer         = time.time() - self.timePrev
             self.timePrev = time.time()
@@ -84,12 +95,14 @@ class yact_node:
         cv2.waitKey(3)
 
         self.frameCount += 1
+        #endregion
 
     
     def matchDetectionAndPose(self, detections, poses):
         '''
         Matches the Openpose detections with bounding boxes
         '''
+        self.detectionDirections = []
 
         if poses.size > 1:
 
@@ -112,14 +125,31 @@ class yact_node:
                     if( self.withinBB(bbox, torso[0], torso[1]) or
                         self.withinBB(bbox, rshoulder[0], rshoulder[1]) or
                         self.withinBB(bbox, lshoulder[0], lshoulder[1])):
-    
+                    
+
                         if(rshoulder[0] > lshoulder[0]):
                             # Moving away from camera
-                            cv2.circle(self.img, (torso[0], torso[1]), 9, (179, 16, 191), -1)
+                            cv2.circle(self.img, (torso[0], torso[1]), 9, (0, 255, 0), -1)
+                            directionTowardsCamera = False
                         else:
                             # Moving towards camera
                             cv2.circle(self.img, (torso[0], torso[1]), 9, (0, 0, 255), -1)
-    
+                            directionTowardsCamera = True
+
+                        # Build Messages
+                        msgBoundingBox       = BoundingBox()
+                        msgBoundingBox.Class = 'person'
+                        msgBoundingBox.xmin  = bbox[0]
+                        msgBoundingBox.ymin  = bbox[1]
+                        msgBoundingBox.xmax  = bbox[2]
+                        msgBoundingBox.ymax  = bbox[3]
+
+                        msgBBoxDirection                        = BoundingBoxDirection()
+                        msgBBoxDirection.boundingbox            = msgBoundingBox
+                        msgBBoxDirection.directionTowardsCamera = directionTowardsCamera
+
+                        self.detectionDirections.append(msgBBoxDirection)
+
                         # Once matched, move onto next pose
                         break 
 

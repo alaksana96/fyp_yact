@@ -52,6 +52,8 @@ add_message_files(
   FILES
   BoundingBox.msg
   CompressedImageAndBoundingBoxes.msg
+  BoundingBoxDirection.msg
+  DetectionAndDirection.msg
 )
 
 ## Generate services in the 'srv' folder

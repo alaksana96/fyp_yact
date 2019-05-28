@@ -1,0 +1,2 @@
+BoundingBox boundingbox
+bool directionTowardsCamera
