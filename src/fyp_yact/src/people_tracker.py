@@ -164,8 +164,8 @@ class yact_node:
 
 
 def main(args):
-    yn = yact_node(debug = 1)
     rospy.init_node('yact_node', anonymous=True)
+    yn = yact_node(debug = 1)
 
     try:
         rospy.spin()

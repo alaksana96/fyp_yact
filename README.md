@@ -46,10 +46,35 @@ Open the ``src/fyp_yact/msg`` folder to see the custom messages:
     uint8[] data
     BoundingBox[] bounding_boxes
     ```
+
+* **`BoundingBoxDirection`** 
+
+    Bounding Box and Direction pair
+
+    ```
+    BoundingBox boundingbox
+    bool directionTowardsCamera
+    ```
+
+* **`DetectionAndDirection`** 
+
+    List of BoundingBoxDirection
+
+    ```
+    Header header
+    BoundingBoxDirection[] detections
+    ```
+
 ## Topics
 
 ### Subscribed Topics
 
-* **`/yolo_detector/output/compresseddetections`** ([sensor_msg::CompressedImageAndBoundingBoxes])
+* **`/yolo_detector/output/compresseddetections`** ([fyp_yact::CompressedImageAndBoundingBoxes])
 
     Subscribe to the compressed image topic from the Hololens in the JPEG format and the detections from YOLO.
+
+### Published Topics
+
+* **`/people_tracker/output/detectiondirections`** ([fyp_yact::DetectionAndDirection])
+
+    Publishes a list of Detection Bounding Boxes and Direction pairs.
