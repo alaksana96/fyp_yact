@@ -2,11 +2,13 @@
 
 import sys, os
 
-from openpose import pyopenpose as op
-
+from deep_sort.deep_sort           import nn_matching
+from deep_sort.deep_sort.detection import Detection
+from deep_sort.deep_sort.tracker   import Tracker
+from deep_sort.tools               import generate_detections as gdet
 
 from fyp_yact.msg import BoundingBox, CompressedImageAndBoundingBoxes # Input Messages
-from fyp_yact.msg import BoundingBoxDirection, DetectionAndDirection  # Output Messages
+from fyp_yact.msg import BoundingBoxID, DetectionAndID  # Output Messages
 
 from   collections import deque
 import cv2
@@ -30,26 +32,28 @@ class yact_node:
         self.frameCount = 0
         self.timePrev   = time.time()
 
-        #region OPENPOSE
-        opParams = dict()
-        opParams['model_folder']   = '/home/aufar/Documents/openpose/models/'
-        opParams['net_resolution'] = '176x176'
+        #region DEEPSORT
+        metric = nn_matching.NearestNeighborDistanceMetric('cosine',
+                                                           matching_threshold = 0.2,
+                                                           budget = 100)
+        self.tracker = Tracker(metric)
 
-        self.opWrapper = op.WrapperPython()
-        
-        self.opWrapper.configure(opParams)
-        self.opWrapper.start()
+        absFilePath = os.path.abspath(__file__)
+        fileDir     = os.path.dirname(absFilePath)
 
-        self.datum = op.Datum()
+        filePathModel = os.path.join(fileDir, 'deep_sort/resources/networks/mars-small128.pb')
+        self.encoder  = gdet.create_box_encoder(filePathModel, batch_size=1)
         #endregion
+
+        self.detectionAndId = []
 
         self.subscriberImageDetections = rospy.Subscriber('yolo_detector/output/compresseddetections',
                                                           CompressedImageAndBoundingBoxes,
                                                           self.callback,
                                                           queue_size = 1)
 
-        self.publisherDetectionDirections = rospy.Publisher('people_tracker/output/detectiondirections',
-                                                            DetectionAndDirection,
+        self.publisherDetectionID      = rospy.Publisher('yact/output/detectionid',
+                                                            DetectionAndID,
                                                             queue_size = 1)
 
 
@@ -59,27 +63,38 @@ class yact_node:
 
         lstDetections = msg.bounding_boxes
 
-        lstDets = []
+        lstDetsDeepSort = []
 
         if( lstDetections ):
             
             for det in lstDetections:
 
                 if det.Class == 'person':
-                    lstDets.append([det.xmin, det.ymin, det.xmax, det.ymax])
+                    
+                    # Deep Sort Bounding Boxes
+                    # Use the format TOP LEFT WIDTH HEIGHT (tlwh)
+                    dsWidth  = det.xmax - det.xmin
+                    dsHeight = det.ymax - det.ymin 
+                    lstDetsDeepSort.append([det.xmin, det.ymin, dsWidth, dsHeight])
 
+        self.detectionAndId = []
 
-        self.datum.cvInputData = self.img
-        self.opWrapper.emplaceAndPop([self.datum])
+        #region DEEPSORT
+        if self.frameCount % 3 == 0:
+            features = self.encoder(self.img, lstDetsDeepSort)
+    
+            # Create DeepSort detections
+            trackedObjects = [Detection(bbox, 1.0, feature) for bbox, feature in zip(lstDetsDeepSort, features)]
+    
+            self.tracker.predict()
+            self.tracker.update(trackedObjects)
+        #endregion
 
-        self.matchDetectionAndPose(lstDets, self.datum.poseKeypoints)
+        self.displayDetections()
 
-        # Build Message & Publish
-        msgDetectionAndDirection            = DetectionAndDirection()
-        msgDetectionAndDirection.header     = msg.header
-        msgDetectionAndDirection.detections = self.detectionDirections
-
-        self.publisherDetectionDirections.publish(msgDetectionAndDirection)
+        msgDetectionAndID            = DetectionAndID()
+        msgDetectionAndID.header     = msg.header
+        msgDetectionAndID.detections = self.detectionAndId
 
         #region DISPLAY
         if self.frameCount % 10 == 0:
@@ -97,70 +112,32 @@ class yact_node:
         self.frameCount += 1
         #endregion
 
-    
-    def matchDetectionAndPose(self, detections, poses):
-        '''
-        Matches the Openpose detections with bounding boxes
-        '''
-        self.detectionDirections = []
 
-        if poses.size > 1:
+    #region DEBUG 
+    def displayDetections(self):
 
-            for pose in poses:
-                '''
-                Check a few key positions (https://github.com/CMU-Perceptual-Computing-Lab/openpose/blob/master/doc/media/keypoints_pose_25.png)
-                0: Mid head
-                1: Mid Torso
-                2, 3, 4: Right Shoulder, Elbow, Arm
-                5, 6, 7: Left Shoulder, Elbow, Arm
-                '''
+        for track in self.tracker.tracks:
+            
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue
+            
+            bbox = track.to_tlbr()
 
-                # Check torso, right/left shoulder
-                torso     = pose[1]
-                rshoulder = pose[2]
-                lshoulder = pose[5]
-                
-                for bbox in detections:
-                    
-                    if( self.withinBB(bbox, torso[0], torso[1]) or
-                        self.withinBB(bbox, rshoulder[0], rshoulder[1]) or
-                        self.withinBB(bbox, lshoulder[0], lshoulder[1])):
-                    
+            # Construct message
+            msgBbid = BoundingBoxID()
+            msgBbid.boundingBox.xmin = int(bbox[0])
+            msgBbid.boundingBox.ymin = int(bbox[1])
+            msgBbid.boundingBox.xmax = int(bbox[2])
+            msgBbid.boundingBox.ymax = int(bbox[3])
+            msgBbid.id = int(track.track_id)
 
-                        if(rshoulder[0] > lshoulder[0]):
-                            # Moving away from camera
-                            cv2.circle(self.img, (torso[0], torso[1]), 9, (0, 255, 0), -1)
-                            directionTowardsCamera = False
-                        else:
-                            # Moving towards camera
-                            cv2.circle(self.img, (torso[0], torso[1]), 9, (0, 0, 255), -1)
-                            directionTowardsCamera = True
+            self.detectionAndId.append(msgBbid)
 
-                        # Build Messages
-                        msgBoundingBox       = BoundingBox()
-                        msgBoundingBox.Class = 'person'
-                        msgBoundingBox.xmin  = bbox[0]
-                        msgBoundingBox.ymin  = bbox[1]
-                        msgBoundingBox.xmax  = bbox[2]
-                        msgBoundingBox.ymax  = bbox[3]
-
-                        msgBBoxDirection                        = BoundingBoxDirection()
-                        msgBBoxDirection.boundingbox            = msgBoundingBox
-                        msgBBoxDirection.directionTowardsCamera = directionTowardsCamera
-
-                        self.detectionDirections.append(msgBBoxDirection)
-
-                        # Once matched, move onto next pose
-                        break 
-
-                
-    def withinBB(self, bbox, x, y):
-
-        if( x >= bbox[0] and x <= bbox[2] and
-            y >= bbox[1] and y <= bbox[3] ):
-            return True
-        else:
-            return False
+            # Draw bounding box and label
+            cv2.rectangle(self.img, (int(bbox[0]) , int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255,0,0), 2)
+            labelText = 'ID: {}'.format(track.track_id)
+            cv2.putText(self.img, labelText, (int(bbox[0]), int(bbox[1]) - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+    #endregion
 
 
 def main(args):

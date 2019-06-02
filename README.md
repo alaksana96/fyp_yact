@@ -19,6 +19,9 @@ The node depends on the detections of people/person objects from the yolo detect
 
     * [Youtube Video](https://youtu.be/1Br1ZKIr9FY)
 
+### Openpose
+* Also depends on openpose, but my god is that a pain to setup. I didn't include it as a submodule because you should just follow the tutorial online for that. Goodluck though. Remove ``people_direction`` if you dont want to bother with OpenPose.
+
 ## Custom Messages
 
 Open the ``src/fyp_yact/msg`` folder to see the custom messages:
@@ -65,6 +68,25 @@ Open the ``src/fyp_yact/msg`` folder to see the custom messages:
     BoundingBoxDirection[] detections
     ```
 
+* **`BoundingBoxID`** 
+
+    Bounding Box and ID pair
+
+    ```
+    BoundingBox boundingBox
+    int64 id
+    ```
+
+* **`DetectionAndID`** 
+
+    List of BoundingBoxID
+
+    ```
+    Header header
+    BoundingBoxID[] detections
+    ```
+
+
 ## Topics
 
 ### Subscribed Topics
@@ -75,6 +97,11 @@ Open the ``src/fyp_yact/msg`` folder to see the custom messages:
 
 ### Published Topics
 
-* **`/people_tracker/output/detectiondirections`** ([fyp_yact::DetectionAndDirection])
+* **`/yact/output/detectiondirections`** ([fyp_yact::DetectionAndDirection])
 
     Publishes a list of Detection Bounding Boxes and Direction pairs.
+
+
+* **`/yact/output/detectiondirections`** ([fyp_yact::DetectionAndDirection])
+
+    Publishes a list of Detection Bounding Boxes and DeepSort ID pairs.
