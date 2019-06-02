@@ -52,7 +52,7 @@ class yact_node:
                                                           self.callback,
                                                           queue_size = 1)
 
-        self.publisherDetectionID      = rospy.Publisher('yact/output/detectionid',
+        self.publisherDetectionID      = rospy.Publisher('yact/output/detectionids',
                                                             DetectionAndID,
                                                             queue_size = 1)
 

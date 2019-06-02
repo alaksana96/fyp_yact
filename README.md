@@ -102,6 +102,6 @@ Open the ``src/fyp_yact/msg`` folder to see the custom messages:
     Publishes a list of Detection Bounding Boxes and Direction pairs.
 
 
-* **`/yact/output/detectiondirections`** ([fyp_yact::DetectionAndDirection])
+* **`/yact/output/detectiondids`** ([fyp_yact::DetectionAndID])
 
     Publishes a list of Detection Bounding Boxes and DeepSort ID pairs.
